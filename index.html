@@ -112,6 +112,15 @@ input:focus,textarea:focus{border-color:var(--blue);outline:none;box-shadow:0 0 
 .foot{text-align:center;color:var(--muted);font-size:12.5px;margin-top:16px}
 .back-link{background:none;border:0;color:var(--blue);font-weight:650;cursor:pointer;padding:0;margin-bottom:14px;align-self:flex-start}
 
+.btn.danger{background:var(--red);color:#fff}
+.btn.danger:hover{background:#912018}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+.status{display:inline-block;font-size:12px;font-weight:750;letter-spacing:.05em;text-transform:uppercase;border-radius:999px;padding:4px 10px;margin-bottom:12px}
+.status.ok{background:var(--green-soft);color:#14632a}.status.cx{background:var(--red-soft);color:var(--red)}.status.past{background:var(--line-2);color:var(--ink-2)}
+.fromto{display:grid;gap:10px;margin-bottom:16px}
+.fromto .summary{margin:0}
+.summary.old{opacity:.7}.summary.old .when{text-decoration:line-through}
+.lbl{font-size:12px;font-weight:750;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:2px}
 @media (max-width:900px){
   .card{grid-template-columns:1fr}
   .profile{border-right:0;border-bottom:1px solid var(--line)}
@@ -155,6 +164,7 @@ input:focus,textarea:focus{border-color:var(--blue);outline:none;box-shadow:0 0 
 const CONFIG = {
   availabilityUrl: "https://hook.us1.make.com/ht8c4hiivqtu26dfsb1bkwlgw1nqi5yj",
   bookingUrl: "https://hook.us1.make.com/ron8r2kzienhlgud1xipb19kl34hy2m2",
+  manageUrl: "https://hook.us1.make.com/o6d8cgaemnx4i89fgacy8sm4k8kg1u4d",
   contactEmail: "dexter.magaoay@nlbprogram.com",
   minNoticeHours: 12,
   daysAhead: 21,
@@ -169,6 +179,8 @@ const CONFIG = {
   ],
 };
 const DEMO = CONFIG.availabilityUrl.startsWith("__") || CONFIG.bookingUrl.startsWith("__");
+const QS = new URLSearchParams(location.search);
+const TOKEN = /^[0-9a-fA-F-]{36}$/.test(QS.get("b") || "") ? QS.get("b") : null;
 
 /* ============ HELPERS ============ */
 const $ = s => document.querySelector(s);
@@ -190,6 +202,8 @@ const state = {
   type: CONFIG.types[1], h24: false,
   busy: null, loading: true, loadError: false,
   month: null, day: null, slot: null, error: "", done: null, tzOpen: false,
+  mode: TOKEN ? "manage" : "book",
+  m: { loading: !!TOKEN, error: "", booking: null, view: QS.get("a") || "overview", result: null, busy: false },
 };
 
 /* ============ DATA ============ */
@@ -268,8 +282,13 @@ function bindTz() {
 function render() {
   renderProfile();
   const main = $("#main");
+  if (state.mode === "manage") return renderManage(main);
   if (state.done) return renderDone(main);
   if (state.slot) return renderForm(main);
+  renderPicker(main, { title: "Select a date and time", sub: "Choose a meeting length, then pick an open time.", chips: true });
+}
+
+function renderPicker(main, o) {
 
   const chips = CONFIG.types.map(t => `<button type="button" class="chip" data-id="${t.id}" aria-pressed="${t.id === state.type.id}">${t.label}</button>`).join("");
   let body;
@@ -282,10 +301,11 @@ function render() {
     body = pickerHtml();
   }
   main.innerHTML = `
+    ${o.back ? `<button type="button" class="back-link" id="pback">&#8592; Back</button>` : ""}
     ${DEMO ? `<div class="note info" style="margin-bottom:14px">Preview mode: sample availability, nothing is booked.</div>` : ""}
-    <h2 class="step-title">Select a date and time</h2>
-    <p class="step-sub">Choose a meeting length, then pick an open time.</p>
-    <div class="durations" role="group" aria-label="Meeting length">${chips}</div>
+    <h2 class="step-title">${esc(o.title)}</h2>
+    <p class="step-sub">${o.sub}</p>
+    ${o.chips ? `<div class="durations" role="group" aria-label="Meeting length">${chips}</div>` : ""}
     ${tzBar()}
     ${state.error ? `<div class="note err" style="margin-bottom:14px">${esc(state.error)}</div>` : ""}
     ${body}`;
@@ -293,6 +313,7 @@ function render() {
   bindTz();
   if ($("#retry")) $("#retry").onclick = loadBusy;
   if (!state.loading && !state.loadError) bindPicker();
+  if (o.back) $("#pback").onclick = o.back;
 }
 
 function pickerHtml() {
@@ -394,13 +415,13 @@ async function submit(ev) {
   };
   let res;
   try {
-    if (DEMO) { await new Promise(r => setTimeout(r, 700)); res = { ok: true, joinUrl: "https://zoom.us/j/preview" }; }
+    if (DEMO) { await new Promise(r => setTimeout(r, 700)); res = { ok: true, joinUrl: "https://zoom.us/j/preview", token: "00000000-0000-4000-8000-000000000000" }; }
     else {
       const r = await fetch(CONFIG.bookingUrl, { method: "POST", body: new URLSearchParams(payload) });
       res = await r.json().catch(() => ({ ok: false }));
     }
   } catch { res = { ok: false }; }
-  if (res.ok) { state.done = { ...payload, joinUrl: res.joinUrl }; return render(); }
+  if (res.ok === true) { state.done = { ...payload, joinUrl: res.joinUrl, token: res.token }; return render(); }
   if (res.reason === "taken") { state.slot = null; state.error = "Sorry, that time was just taken. Please choose another time."; return loadBusy(); }
   state.error = `We couldn't complete your booking, and nothing was scheduled. Please try again or email ${CONFIG.contactEmail}.`;
   renderForm($("#main"));
@@ -419,22 +440,175 @@ function renderDone(main) {
     <div class="done">
       <div class="check"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#169c2e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
       <h2 class="step-title">You're scheduled</h2>
-      <p class="step-sub">A calendar invite with the Zoom link was sent to <strong>${esc(d.email)}</strong>.</p>
+      <p class="step-sub">A confirmation with the Zoom link and a calendar invite is on its way to <strong>${esc(d.email)}</strong>.</p>
       <div class="summary">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0f6bdc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
         <div><div class="t">${esc(state.type.long)} with Dexter Magaoay</div><div>${esc(whenText(s))}</div><div style="color:var(--muted);font-size:13px">${esc(tzLabel(state.tz))}</div>
         ${d.joinUrl ? `<div style="margin-top:6px">Zoom: <a href="${esc(d.joinUrl)}" target="_blank" rel="noopener">${esc(d.joinUrl)}</a></div>` : ""}</div>
       </div>
-      <div class="row">
-        <button class="btn ghost" id="again">Book another time</button>
-      </div>
-      <p class="step-sub" style="margin-top:18px">Need to change it? Reply to the calendar invite or email <a href="mailto:${CONFIG.contactEmail}">${CONFIG.contactEmail}</a>.</p>
+      ${d.token ? `<p class="step-sub" style="margin:4px 0 10px"><strong style="color:var(--ink)">Need to make a change?</strong> You can reschedule or cancel anytime, using these buttons or the ones in your email.</p>
+      <div class="actions">
+        <a class="btn ghost" style="text-decoration:none;color:var(--ink)" href="?b=${esc(d.token)}&a=reschedule">Reschedule</a>
+        <a class="btn ghost" style="text-decoration:none;color:var(--ink)" href="?b=${esc(d.token)}&a=cancel">Cancel</a>
+      </div>` : `<p class="step-sub">Need to change it? Email <a href="mailto:${CONFIG.contactEmail}">${CONFIG.contactEmail}</a>.</p>`}
     </div>`;
-  $("#again").onclick = () => { state.done = null; state.slot = null; loadBusy(); };
+}
+
+
+/* ============ MANAGE (view, reschedule, cancel) ============ */
+async function manageCall(data) {
+  if (DEMO) {
+    await new Promise(r => setTimeout(r, 500));
+    if (data.action === "get") {
+      const s = Date.now() + 3 * 86400000; const st = Math.ceil(s / 1800000) * 1800000;
+      return { ok: true, status: "booked", name: "Preview Guest", topic: "", tz: state.tz, minutes: 30,
+               start: new Date(st).toISOString(), end: new Date(st + 1800000).toISOString(), joinUrl: "https://zoom.us/j/preview", past: false };
+    }
+    return { ok: true };
+  }
+  try {
+    const r = await fetch(CONFIG.manageUrl, { method: "POST", body: new URLSearchParams({ b: TOKEN, website: "", ...data }) });
+    return await r.json();
+  } catch { return { ok: false }; }
+}
+
+async function loadBooking() {
+  state.m.loading = true; render();
+  const res = await manageCall({ action: "get" });
+  state.m.loading = false;
+  if (res && res.ok === true) {
+    state.m.booking = res;
+    state.type = CONFIG.types.find(t => t.minutes === Number(res.minutes)) || CONFIG.types[1];
+    if (state.m.view === "reschedule" && res.status === "booked" && !res.past) { render(); return loadBusy(); }
+  } else {
+    state.m.error = res && res.reason === "notfound" ? "notfound" : "load";
+  }
+  render();
+}
+
+function whenFor(startIso, endIso) {
+  const s = Date.parse(startIso), e = Date.parse(endIso), tf = { hour: "numeric", minute: "2-digit", hourCycle: state.h24 ? "h23" : "h12" };
+  return `${fmt(s, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}, ${fmt(s, tf)} to ${fmt(e, tf)}`;
+}
+
+function summaryBox(b, startIso, endIso, extra = "", cls = "") {
+  return `<div class="summary ${cls}">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0f6bdc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+    <div>${extra}<div class="t">${esc(b.minutes)}-minute meeting with Dexter Magaoay</div><div class="when">${esc(whenFor(startIso, endIso))}</div><div style="color:var(--muted);font-size:13px">${esc(tzLabel(state.tz))}</div></div>
+  </div>`;
+}
+
+function goView(v) { state.m.view = v; state.slot = null; state.error = ""; history.replaceState(null, "", `?b=${TOKEN}${v === "overview" ? "" : "&a=" + v}`); render(); if (v === "reschedule" && !state.busy) loadBusy(); }
+function bookNew() { location.href = location.pathname; }
+
+function renderManage(main) {
+  const m = state.m, b = m.booking;
+  const pill = $("#selectedPill"); pill.classList.remove("on");
+  if (m.loading) { main.innerHTML = `<div class="skeleton" style="height:28px;width:60%;margin-bottom:14px"></div><div class="skeleton" style="height:110px"></div>`; return; }
+  if (m.error) {
+    main.innerHTML = `<div class="done"><h2 class="step-title">${m.error === "notfound" ? "We couldn't find this booking" : "We couldn't load your booking"}</h2>
+      <p class="step-sub">${m.error === "notfound" ? "The link may be incomplete. Please use the link from your confirmation email." : "Please try again in a minute."} You can also email <a href="mailto:${CONFIG.contactEmail}">${CONFIG.contactEmail}</a>.</p>
+      <div class="actions">${m.error === "load" ? `<button class="btn primary" id="retryM">Try again</button>` : ""}<button class="btn ghost" id="newB">Book a new meeting</button></div></div>`;
+    if ($("#retryM")) $("#retryM").onclick = () => { m.error = ""; loadBooking(); };
+    $("#newB").onclick = bookNew; return;
+  }
+  if (m.result) return renderManageResult(main);
+  if (b.status === "cancelled" || b.past) {
+    main.innerHTML = `<div class="done">
+      <span class="status ${b.status === "cancelled" ? "cx" : "past"}">${b.status === "cancelled" ? "Cancelled" : "Already happened"}</span>
+      <h2 class="step-title">${b.status === "cancelled" ? "This meeting was cancelled" : "This meeting has already taken place"}</h2>
+      <p class="step-sub">If you'd still like to talk, you can book a new time.</p>
+      ${summaryBox(b, b.start, b.end, "", b.status === "cancelled" ? "old" : "")}
+      <div class="actions"><button class="btn primary" id="newB">Book a new time</button></div></div>`;
+    $("#newB").onclick = bookNew; return;
+  }
+  if (m.view === "reschedule") {
+    if (state.slot) return renderRescheduleConfirm(main);
+    return renderPicker(main, { title: "Pick a new time", sub: `Your current time is <strong>${esc(whenFor(b.start, b.end))}</strong>. Choose a new open time below.`, chips: false, back: () => goView("overview") });
+  }
+  if (m.view === "cancel") return renderCancel(main);
+  main.innerHTML = `<div class="done">
+    <span class="status ok">Confirmed</span>
+    <h2 class="step-title">Your meeting with Dexter</h2>
+    <p class="step-sub">Hi ${esc(String(b.name || "").split(" ")[0])}, here are your meeting details.</p>
+    ${summaryBox(b, b.start, b.end)}
+    ${b.joinUrl ? `<p class="step-sub" style="margin-top:-4px">Zoom: <a href="${esc(b.joinUrl)}" target="_blank" rel="noopener">${esc(b.joinUrl)}</a></p>` : ""}
+    <div class="actions">
+      <button class="btn primary" id="toRs">Reschedule</button>
+      <button class="btn ghost" id="toCx">Cancel meeting</button>
+    </div></div>`;
+  $("#toRs").onclick = () => goView("reschedule");
+  $("#toCx").onclick = () => goView("cancel");
+}
+
+function renderCancel(main) {
+  const b = state.m.booking;
+  main.innerHTML = `
+    <button type="button" class="back-link" id="cback">&#8592; Back</button>
+    <h2 class="step-title">Cancel this meeting?</h2>
+    <p class="step-sub">Dexter will be notified, and the Zoom meeting will be removed.</p>
+    ${summaryBox(b, b.start, b.end)}
+    <form id="cf" novalidate style="max-width:520px">
+      <div><label for="reason">Reason for cancelling <span class="opt">(optional)</span></label><textarea id="reason" rows="3" maxlength="500" placeholder="Let Dexter know why, if you like."></textarea></div>
+      <input class="hp" id="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+      ${state.error ? `<div class="note err">${esc(state.error)}</div>` : ""}
+      <div class="actions"><button class="btn danger" type="submit" id="cgo">Yes, cancel meeting</button><button class="btn ghost" type="button" id="keep">Keep meeting</button></div>
+    </form>`;
+  $("#cback").onclick = $("#keep").onclick = () => goView("overview");
+  $("#cf").onsubmit = async ev => {
+    ev.preventDefault(); if ($("#website").value) return;
+    const btn = $("#cgo"); btn.disabled = true; btn.textContent = "Cancelling...";
+    const res = await manageCall({ action: "cancel", reason: $("#reason").value.trim() });
+    if (res && res.ok === true) { state.m.result = { kind: "cancel" }; return render(); }
+    state.error = res && res.reason === "closed" ? "This meeting can no longer be changed." : `We couldn't cancel the meeting. Please try again or email ${CONFIG.contactEmail}.`;
+    renderCancel(main);
+  };
+}
+
+function renderRescheduleConfirm(main) {
+  const b = state.m.booking, s = state.slot, e = s + b.minutes * 60000;
+  const ns = new Date(s).toISOString(), ne = new Date(e).toISOString();
+  main.innerHTML = `
+    <button type="button" class="back-link" id="rback">&#8592; Back</button>
+    <h2 class="step-title">Confirm your new time</h2>
+    <p class="step-sub">The Zoom link stays the same. You'll get an updated calendar invite.</p>
+    <div class="fromto">
+      ${summaryBox(b, b.start, b.end, `<div class="lbl">From</div>`, "old")}
+      ${summaryBox(b, ns, ne, `<div class="lbl">To</div>`)}
+    </div>
+    ${state.error ? `<div class="note err" style="margin-bottom:14px">${esc(state.error)}</div>` : ""}
+    <div class="actions"><button class="btn primary" id="rgo">Confirm new time</button></div>`;
+  $("#rback").onclick = () => { state.slot = null; state.error = ""; render(); };
+  $("#rgo").onclick = async () => {
+    const btn = $("#rgo"); btn.disabled = true; btn.textContent = "Updating...";
+    const res = await manageCall({ action: "reschedule", start: ns, end: ne, tz: state.tz });
+    if (res && res.ok === true) { state.m.result = { kind: "reschedule", start: ns, end: ne, old: { start: b.start, end: b.end } }; return render(); }
+    if (res && res.reason === "taken") { state.slot = null; state.error = "Sorry, that time was just taken. Please choose another time."; render(); return loadBusy(); }
+    state.error = res && res.reason === "closed" ? "This meeting can no longer be changed." : `We couldn't move the meeting, and your original time is unchanged. Please try again or email ${CONFIG.contactEmail}.`;
+    renderRescheduleConfirm(main);
+  };
+}
+
+function renderManageResult(main) {
+  const r = state.m.result, b = state.m.booking;
+  const check = `<div class="check"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#169c2e" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>`;
+  if (r.kind === "cancel") {
+    main.innerHTML = `<div class="done">${check}<h2 class="step-title">Your meeting was cancelled</h2>
+      <p class="step-sub">A cancellation confirmation is on its way to your email, and Dexter has been notified.</p>
+      ${summaryBox(b, b.start, b.end, "", "old")}
+      <div class="actions"><button class="btn primary" id="newB">Book a new time</button></div></div>`;
+    $("#newB").onclick = bookNew; return;
+  }
+  main.innerHTML = `<div class="done">${check}<h2 class="step-title">Your meeting was moved</h2>
+    <p class="step-sub">An updated calendar invite is on its way to your email. The Zoom link stays the same.</p>
+    ${summaryBox(b, r.start, r.end)}
+    ${b.joinUrl ? `<p class="step-sub" style="margin-top:-4px">Zoom: <a href="${esc(b.joinUrl)}" target="_blank" rel="noopener">${esc(b.joinUrl)}</a></p>` : ""}
+    <div class="actions"><button class="btn ghost" id="again">Manage this meeting</button></div></div>`;
+  $("#again").onclick = () => { state.m.result = null; state.slot = null; b.start = r.start; b.end = r.end; goView("overview"); };
 }
 
 render();
-loadBusy();
+if (state.mode === "manage") loadBooking(); else loadBusy();
 </script>
 </body>
 </html>
